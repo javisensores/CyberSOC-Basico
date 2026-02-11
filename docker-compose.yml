@@ -60,6 +60,8 @@ services:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
       - SERVER_NAME=kibana-siem
       - XPACK_SECURITY_ENABLED=false
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY="12345678901234567890123456789012"
+      - XPACK_REPORTING_ENCRYPTIONKEY="12345678901234567890123456789012"
     depends_on:
       - elasticsearch
     networks:
@@ -143,6 +145,29 @@ services:
       - mysql
     volumes:
       - glpi-data:/var/www/html/glpi
+    networks:
+      - socnet
+
+  # Automatización: Crea tickets en GLPI desde eventos de Elasticsearch
+  glpi-automation:
+    build:
+      context: .
+      dockerfile: Dockerfile.glpi-automation
+    container_name: glpi-automation
+    hostname: glpi-automation
+    restart: unless-stopped
+    environment:
+      - ES_HOST=http://elasticsearch:9200
+      - GLPI_DB_HOST=mysql
+      - GLPI_DB_USER=glpi_user
+      - GLPI_DB_PASSWORD=glpi_password
+      - GLPI_DB_NAME=glpidb
+      - GLPI_ENTITY_ID=0
+      - GLPI_TICKET_OWNER_ID=2
+    depends_on:
+      - elasticsearch
+      - mysql
+      - glpi
     networks:
       - socnet
 

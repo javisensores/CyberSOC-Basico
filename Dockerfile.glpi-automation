@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Instalar todas las dependencias
+RUN pip install --no-cache-dir \
+    elasticsearch==8.11.0 \
+    mysql-connector-python \
+    requests
+
+# Copiar el script
+COPY glpi_automation.py .
+
+# Ejecutar Python sin buffering - acepta argumentos
+ENTRYPOINT ["python3", "-u", "glpi_automation.py"]
+CMD ["--mode", "continuous"]
+

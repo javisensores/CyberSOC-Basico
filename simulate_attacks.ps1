@@ -20,6 +20,7 @@ function Simulate-Attack {
     Start-Sleep -Seconds 2
 }
 
+
 # Menu principal
 Write-Host "Selecciona el tipo de ataque a simular:" -ForegroundColor White
 Write-Host ""
@@ -167,4 +168,9 @@ Write-Host "Proximos pasos:" -ForegroundColor Cyan
 Write-Host "1. Accede a Kibana: http://localhost:5601" -ForegroundColor White
 Write-Host "2. Ve a Discover y busca: tags:security_event" -ForegroundColor White
 Write-Host "3. Filtra por severidad: severity:critical o severity:high" -ForegroundColor White
+Write-Host "4. Accede a GLPI: http://localhost:9000 (usuario: glpi, pass: glpi)" -ForegroundColor White
+Write-Host "5. Ve a Asistencia > Tickets para ver los tickets creados automaticamente" -ForegroundColor White
+Write-Host ""
+Write-Host "[!] Nota: Los tickets se crean automaticamente en GLPI cuando los eventos llegan a Elasticsearch" -ForegroundColor Yellow
+Write-Host "      (El contenedor glpi-automation los procesa en segundo plano)" -ForegroundColor Yellow
 Write-Host ""
