@@ -164,6 +164,10 @@ services:
       - GLPI_DB_NAME=glpidb
       - GLPI_ENTITY_ID=0
       - GLPI_TICKET_OWNER_ID=2
+      - GLPI_ES_INDEXES=syslog-*,correlations-*
+      - GLPI_ENABLE_LOCAL_CORRELATION=false
+      - GLPI_ONLY_CORRELATIONS=false
+      - GLPI_SKIP_SSH_FAILED_LOGIN=true
     depends_on:
       - elasticsearch
       - mysql

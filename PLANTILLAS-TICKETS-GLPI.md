@@ -12,7 +12,7 @@ ATAQUE SSH BRUTE FORCE
 Timestamp: 04/02/2026 [HORA]
 Host afectado: syslog-client
 IP Origen: 192.168.1.50
-Intentos detectados: >10 fallos
+Intentos detectados: 10 fallos
 Severidad: MEDIUM
 
 DETECCIÓN:

@@ -11,6 +11,7 @@ import json
 import time
 import sys
 import argparse
+import re
 from datetime import datetime, timedelta
 from elasticsearch import Elasticsearch
 import mysql.connector
@@ -19,6 +20,11 @@ import os
 
 # Configuración
 ES_HOST = os.getenv("ES_HOST", "http://localhost:9200")
+ES_INDEXES = os.getenv("GLPI_ES_INDEXES", "syslog-*")
+ES_IGNORE_UNAVAILABLE = os.getenv("GLPI_ES_IGNORE_UNAVAILABLE", "true").strip().lower() in ("1", "true", "yes")
+PROCESS_ONLY_CORRELATIONS = os.getenv("GLPI_ONLY_CORRELATIONS", "true").strip().lower() in ("1", "true", "yes")
+CORRELATION_INDEX_PREFIX = os.getenv("GLPI_CORRELATION_INDEX_PREFIX", "correlations-")
+SKIP_SSH_FAILED_LOGIN = os.getenv("GLPI_SKIP_SSH_FAILED_LOGIN", "true").strip().lower() in ("1", "true", "yes")
 GLPI_DB_HOST = os.getenv("GLPI_DB_HOST", "localhost")
 GLPI_DB_USER = os.getenv("GLPI_DB_USER", "glpi_user")
 GLPI_DB_PASSWORD = os.getenv("GLPI_DB_PASSWORD", "glpi_password")
@@ -34,11 +40,18 @@ DEFAULT_REQUESTTYPE_ID = int(os.getenv("GLPI_REQUESTTYPE_ID", "1"))
 DEFAULT_TIME_TO_RESOLVE_HOURS = int(os.getenv("GLPI_TIME_TO_RESOLVE_HOURS", "0"))
 REQUIRE_SECURITY_TAG = os.getenv("GLPI_REQUIRE_SECURITY_TAG", "true").strip().lower() in ("1", "true", "yes")
 DEFAULT_TICKET_OWNER_ID = int(os.getenv("GLPI_TICKET_OWNER_ID", "0"))
+ENABLE_LOCAL_CORRELATION = os.getenv("GLPI_ENABLE_LOCAL_CORRELATION", "false").strip().lower() in ("1", "true", "yes")
+SSH_BRUTE_FORCE_THRESHOLD = int(os.getenv("GLPI_SSH_BRUTE_FORCE_THRESHOLD", "10"))
+SSH_BRUTE_FORCE_WINDOW_MINUTES = int(os.getenv("GLPI_SSH_BRUTE_FORCE_WINDOW_MINUTES", "5"))
+SSH_BRUTE_FORCE_COOLDOWN_MINUTES = int(
+    os.getenv("GLPI_SSH_BRUTE_FORCE_COOLDOWN_MINUTES", str(SSH_BRUTE_FORCE_WINDOW_MINUTES))
+)
 
 print("=" * 60, flush=True)
 print("GLPI Security Events Automation", flush=True)
 print("=" * 60, flush=True)
 print(f"Elasticsearch: {ES_HOST}", flush=True)
+print(f"Indices: {ES_INDEXES}", flush=True)
 print(f"GLPI Database: {GLPI_DB_HOST}", flush=True)
 print(f"GLPI Defaults: Entity={DEFAULT_ENTITY_ID}, Requester={DEFAULT_REQUESTER_ID}, Recipient={DEFAULT_RECIPIENT_ID}, Category={DEFAULT_CATEGORY_ID}, Group={DEFAULT_GROUP_ID}", flush=True)
 print(flush=True)
@@ -80,6 +93,7 @@ def save_last_timestamp(cursor):
 
 # Archivo para ids procesados
 PROCESSED_IDS_FILE = "/tmp/glpi_processed_ids.txt"
+BRUTE_FORCE_CACHE_FILE = "/tmp/glpi_bruteforce_cache.json"
 
 def load_processed_ids():
     """Cargar IDs de eventos ya procesados"""
@@ -102,6 +116,168 @@ def save_processed_id(event_id):
             f.write(f"{event_id}\n")
     except Exception as e:
         print(f"⚠️  Error guardando processed id: {e}", flush=True)
+
+def load_bruteforce_cache():
+    """Cargar cache de correlaciones SSH brute force"""
+    try:
+        if os.path.exists(BRUTE_FORCE_CACHE_FILE):
+            with open(BRUTE_FORCE_CACHE_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+    except Exception as e:
+        print(f"⚠️  Error leyendo cache de brute force: {e}", flush=True)
+    return {}
+
+def save_bruteforce_cache(cache):
+    """Guardar cache de correlaciones SSH brute force"""
+    try:
+        with open(BRUTE_FORCE_CACHE_FILE, 'w') as f:
+            json.dump(cache, f)
+    except Exception as e:
+        print(f"⚠️  Error guardando cache de brute force: {e}", flush=True)
+
+def parse_iso_utc(value):
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+def should_skip_correlation(ip, cache, now, cooldown_minutes):
+    last_ts = cache.get(ip)
+    if not last_ts:
+        return False
+    last_dt = parse_iso_utc(last_ts)
+    if not last_dt:
+        return False
+    return (now - last_dt).total_seconds() < (cooldown_minutes * 60)
+
+def extract_hostname(source):
+    hostname = 'syslog-client'
+    if 'hostname' in source:
+        h = source.get('hostname')
+        hostname = h if isinstance(h, str) else 'syslog-client'
+    elif 'host' in source:
+        h = source.get('host')
+        if isinstance(h, dict):
+            hostname = h.get('name', h.get('hostname', 'syslog-client'))
+        elif isinstance(h, str):
+            hostname = h
+    return hostname
+
+def extract_ip_from_event(source, message):
+    ip = source.get('src_ip') or source.get('ip') or 'N/A'
+    if isinstance(ip, dict):
+        ip = ip.get('ip', 'N/A') if isinstance(ip, dict) else 'N/A'
+
+    if ip == 'N/A' or isinstance(ip, dict):
+        if isinstance(source.get('host'), dict):
+            host_ips = source['host'].get('ip', [])
+            if isinstance(host_ips, list) and len(host_ips) > 0:
+                ip = host_ips[0]
+        if ip == 'N/A':
+            m = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", str(message))
+            if m:
+                ip = m.group(1)
+
+    return ip
+
+def fetch_ssh_failed_login_events(es_client, since_ts):
+    page_size = 1000
+    events = []
+    query = {
+        "query": {
+            "bool": {
+                "must": [
+                    {"range": {"@timestamp": {"gte": since_ts}}},
+                    {"terms": {"tags.keyword": ["ssh_failed_login"]}}
+                ]
+            }
+        },
+        "sort": [
+            {"@timestamp": {"order": "asc"}},
+            {"_id": {"order": "asc"}}
+        ],
+        "size": page_size
+    }
+
+    search_after = None
+    while True:
+        if search_after:
+            query["search_after"] = search_after
+        response = es_client.search(
+            index=ES_INDEXES,
+            body=query,
+            ignore_unavailable=ES_IGNORE_UNAVAILABLE,
+            allow_no_indices=ES_IGNORE_UNAVAILABLE
+        )
+        hits = response.get("hits", {}).get("hits", [])
+        if not hits:
+            break
+        events.extend(hits)
+        if len(hits) < page_size:
+            break
+        last_hit = hits[-1]
+        search_after = [last_hit["_source"]["@timestamp"], last_hit["_id"]]
+
+    return events
+
+def detect_ssh_bruteforce(es_client, mysql_conn, window_minutes, threshold, cooldown_minutes):
+    if threshold <= 0 or window_minutes <= 0:
+        return 0
+
+    now = datetime.utcnow()
+    window_start = (now - timedelta(minutes=window_minutes)).isoformat() + "Z"
+    events = fetch_ssh_failed_login_events(es_client, window_start)
+    if not events:
+        return 0
+
+    counts = {}
+    host_by_ip = {}
+    last_ts_by_ip = {}
+
+    for event in events:
+        source = event.get('_source', {})
+        message = source.get('message', '') or source.get('msg', '')
+        ip = extract_ip_from_event(source, message)
+        if ip == 'N/A':
+            continue
+        counts[ip] = counts.get(ip, 0) + 1
+        if ip not in host_by_ip:
+            host_by_ip[ip] = extract_hostname(source)
+        last_ts_by_ip[ip] = source.get('@timestamp')
+
+    cache = load_bruteforce_cache()
+    created = 0
+
+    for ip, count in counts.items():
+        if count < threshold:
+            continue
+        if should_skip_correlation(ip, cache, now, cooldown_minutes):
+            continue
+
+        synthetic = {
+            "event_type": "SSH Brute Force (correlacion)",
+            "severity": "medium",
+            "tags": ["ssh_brute_force", "security_event"],
+            "@timestamp": last_ts_by_ip.get(ip, now.isoformat() + "Z"),
+            "message": f"SSH failed login attempts: {count}",
+            "src_ip": ip,
+            "attempts": count,
+            "window_minutes": window_minutes,
+            "hostname": host_by_ip.get(ip, 'syslog-client'),
+            "correlation": True
+        }
+
+        title, description, severity, meta = build_ticket_from_event(synthetic)
+        if create_glpi_ticket(mysql_conn, title, description, severity, meta=meta):
+            created += 1
+            cache[ip] = now.isoformat() + "Z"
+
+    if created:
+        save_bruteforce_cache(cache)
+
+    return created
 
 def get_mysql_connection():
     """Conectar a MySQL de GLPI"""
@@ -205,7 +381,6 @@ def create_glpi_ticket(conn, title, description, severity="medium", urgency=3, m
         ))
         ticket_id = cursor.lastrowid
 
-        # Añadir relación usuario-ticket para el solicitante (si se proporcionó)
         if ticket_id and requester_id:
             try:
                 cursor.execute(
@@ -278,10 +453,28 @@ def check_elasticsearch_for_events(es_client, last_cursor):
             query["search_after"] = [last_ts]
 
         while True:
-            response = es_client.search(index="syslog-*", body=query)
+            response = es_client.search(
+                index=ES_INDEXES,
+                body=query,
+                ignore_unavailable=ES_IGNORE_UNAVAILABLE,
+                allow_no_indices=ES_IGNORE_UNAVAILABLE
+            )
             hits = response.get("hits", {}).get("hits", [])
             if not hits:
                 break
+            if PROCESS_ONLY_CORRELATIONS:
+                hits = [h for h in hits if h.get("_index", "").startswith(CORRELATION_INDEX_PREFIX)]
+            elif SKIP_SSH_FAILED_LOGIN:
+                filtered = []
+                for h in hits:
+                    src = h.get("_source", {})
+                    tags = src.get("tags", []) or []
+                    if isinstance(tags, str):
+                        tags = [tags]
+                    if "ssh_failed_login" in tags:
+                        continue
+                    filtered.append(h)
+                hits = filtered
             events.extend(hits)
             if len(hits) < page_size:
                 break
@@ -297,8 +490,6 @@ def check_elasticsearch_for_events(es_client, last_cursor):
 
 def build_ticket_from_event(source):
     """Construir título y descripción del ticket a partir del evento usando las plantillas predefinidas."""
-    import re
-    import json
     
     # Limpiar fuentes que pueden tener datos complejos
     event_type = source.get('event_type') or source.get('rule') or 'Evento de Seguridad'
@@ -314,16 +505,7 @@ def build_ticket_from_event(source):
         message = str(message)[:200]
     
     # Extraer hostname limpiamente
-    hostname = 'syslog-client'
-    if 'hostname' in source:
-        h = source.get('hostname')
-        hostname = h if isinstance(h, str) else 'syslog-client'
-    elif 'host' in source:
-        h = source.get('host')
-        if isinstance(h, dict):
-            hostname = h.get('name', h.get('hostname', 'syslog-client'))
-        elif isinstance(h, str):
-            hostname = h
+    hostname = extract_hostname(source)
     
     timestamp = source.get('@timestamp', '')
     tags = source.get('tags', []) or []
@@ -331,21 +513,7 @@ def build_ticket_from_event(source):
         tags = [tags]
 
     # Extraer IP desde campos comunes o desde el mensaje
-    ip = source.get('src_ip') or source.get('ip') or 'N/A'
-    if isinstance(ip, dict):
-        ip = ip.get('ip', 'N/A') if isinstance(ip, dict) else 'N/A'
-    
-    if ip == 'N/A' or isinstance(ip, dict):
-        # Intentar extraer desde host.ip si es Filebeat
-        if isinstance(source.get('host'), dict):
-            host_ips = source['host'].get('ip', [])
-            if isinstance(host_ips, list) and len(host_ips) > 0:
-                ip = host_ips[0]
-        # Fallback: buscar en el mensaje
-        if ip == 'N/A':
-            m = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", str(message))
-            if m:
-                ip = m.group(1)
+    ip = extract_ip_from_event(source, message)
 
     # Formatear fecha/hora a dd/mm/YYYY y hora
     date_str = timestamp
@@ -398,18 +566,23 @@ def build_ticket_from_event(source):
 
     # Plantillas simplificadas basadas en PLANTILLAS-TICKETS-GLPI.md
     if tpl_key in ('ssh_brute_force', 'ssh_failed_login'):
+        attempts = source.get('attempts', '>10')
+        window_minutes = source.get('window_minutes')
+        correlation = bool(source.get('correlation'))
         title = f"MEDIUM: SSH Brute Force desde {ip} - {date_str}"
         description = f"""
 ATAQUE SSH BRUTE FORCE
 Timestamp: {date_str} {time_str}
 Host afectado: {hostname}
 IP Origen: {ip}
-Intentos detectados: >10 fallos
+Intentos detectados: {attempts} fallos
+{'Ventana de correlacion: ' + str(window_minutes) + ' min' if window_minutes else ''}
 Severidad: MEDIUM
 
 DETECCIÓN:
 - Detectado por regla Logstash "ssh_failed_login"
 - Tags: ssh_failed_login, security_event
+{'- Correlacion de eventos SSH (fallos multiples)' if correlation else ''}
 
 ACCIONES (según PLAYBOOK):
 1. Bloquear IP en firewall (iptables)
@@ -770,6 +943,23 @@ def process_security_events(es_client, mysql_conn, last_cursor, skip_processed_i
 
     return last_cursor
 
+def run_correlation_rules(es_client, mysql_conn):
+    """Ejecutar reglas de correlacion y crear tickets"""
+    if not ENABLE_LOCAL_CORRELATION:
+        return 0
+    created = 0
+    if SSH_BRUTE_FORCE_THRESHOLD > 0:
+        created += detect_ssh_bruteforce(
+            es_client,
+            mysql_conn,
+            SSH_BRUTE_FORCE_WINDOW_MINUTES,
+            SSH_BRUTE_FORCE_THRESHOLD,
+            SSH_BRUTE_FORCE_COOLDOWN_MINUTES
+        )
+    if created:
+        print(f"✅ Correlaciones creadas: {created}", flush=True)
+    return created
+
 def main():
     """Loop principal o ejecución única según modo"""
     
@@ -820,6 +1010,8 @@ def main():
         minutes_ago = datetime.utcnow() - timedelta(minutes=args.minutes)
         last_cursor = {"timestamp": minutes_ago.isoformat() + "Z", "id": None}
 
+        run_correlation_rules(es_client, mysql_conn)
+
         # Procesar una sola vez sin cachear IDs (para permitir reprocesar eventos)
         last_cursor = process_security_events(es_client, mysql_conn, last_cursor, skip_processed_ids=True)
         
@@ -833,6 +1025,7 @@ def main():
         
         try:
             while True:
+                run_correlation_rules(es_client, mysql_conn)
                 # Procesar eventos cada 30 segundos
                 last_cursor = process_security_events(es_client, mysql_conn, last_cursor)
                 # Guardar el cursor después de procesar

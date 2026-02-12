@@ -175,6 +175,8 @@ Para personalizar la creación de tickets:
 ```bash
 # Base de datos GLPI
 ES_HOST=http://elasticsearch:9200
+GLPI_ES_INDEXES=syslog-*,correlations-*
+GLPI_ES_IGNORE_UNAVAILABLE=true
 GLPI_DB_HOST=localhost
 GLPI_DB_USER=glpi_user
 GLPI_DB_PASSWORD=glpi_password
@@ -188,6 +190,14 @@ GLPI_RECIPIENT_ID=1          # Usuario destinatario (default: 0)
 GLPI_GROUP_ID=1              # Grupo responsable (default: 0)
 GLPI_TEMPLATE_ID=1           # Plantilla de ticket (default: 0)
 GLPI_REQUESTTYPE_ID=3        # Tipo de solicitud (default: 0)
+
+# Correlacion (si usas Kibana rules)
+GLPI_ENABLE_LOCAL_CORRELATION=false
+
+# Correlacion local (si la activas)
+GLPI_SSH_BRUTE_FORCE_THRESHOLD=10
+GLPI_SSH_BRUTE_FORCE_WINDOW_MINUTES=5
+GLPI_SSH_BRUTE_FORCE_COOLDOWN_MINUTES=5
 ```
 
 ## 🐛 Troubleshooting
