@@ -20,7 +20,7 @@ Sistema CyberSOC completo que implementa el ciclo de vida completo de eventos de
 
 ### Reglas de Detección Activas (Logstash)
 
-8 reglas de seguridad configuradas:
+10 reglas de seguridad configuradas:
 1. **SSH Brute Force** (severity: medium)
 2. **SQL Injection** (severity: high)
 3. **XSS Attack** (severity: high)
@@ -161,6 +161,31 @@ Espera 30-60 segundos hasta que todos los contenedores estén healthy.
 
 ## Arquitectura del Stack
 
+### Arquitectura inicial (Primera versión)
+
+``` 
+┌─────────────────────────────────────────────────────────────────┐
+│                 CyberSOC - Arquitectura Inicial                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Syslog Client  ───────►  Syslog Server (514/TCP)               │
+│                              │                                  │
+│  Filebeat  ──────────────────┘                                  │
+│                              ▼                                  │
+│                        Logstash (8 reglas)                      │
+│                              ▼                                  │
+│                      Elasticsearch (:9200)                      │
+│                         ├──────────► Kibana (:5601)             │
+│                         └──────────► GLPI (:9000) + MySQL       │
+│                                                                 │
+│  Flujo de tickets: principalmente manual desde analista SOC     │
+│  (Kibana/Playbook → creación de ticket en GLPI).                │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Arquitectura actual (Versión operativa final)
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    CyberSOC Stack COMPLETO                      │
@@ -172,37 +197,41 @@ Espera 30-60 segundos hasta que todos los contenedores estén healthy.
 │  └──────────────┘         └────────┬────────┘                   │
 │                                    │                            │
 │  ┌──────────────┐                  │                            │
-│  │   Filebeat   │──────────────────┤                            │
-│  │  (Collector) │                  │                            │
-│  └──────────────┘                  v                            │
-│                          ┌──────────────────┐                   │
-│                          │    Logstash      │                   │
-│                          │  (Processing)    │                   │
-│                          │  8 reglas        │                   │
-│                          └────────┬─────────┘                   │
-│                                   │                             │
-│                                   v                             │
-│                          ┌──────────────────┐                   │
-│                          │  Elasticsearch   │                   │
-│                          │   (Storage)      │                   │
-│                          │  Port: 9200      │                   │
-│                          └────┬────────┬────┘                   │
-│                               │        │                        │
-│               ┌───────────────┘        └──────────┐             │
-│               v                                   v             │
-│    ┌──────────────────┐              ┌─────────────────┐        │
-│    │     Kibana       │              │      GLPI       │        │
-│    │  (Dashboard)     │              │   (Ticketing)   │        │
-│    │  Port: 5601      │              │   Port: 9000    │        │
-│    └──────────────────┘              └────────┬────────┘        │
-│                                               │                 │
-│                                      ┌────────▼────────┐        │
-│                                      │     MySQL       │        │
-│                                      │   (Database)    │        │
-│                                      └─────────────────┘        │
+│  │   Filebeat   │──────────────────┘                            │
+│  │  (Collector) │                                               │
+│  └───────┬──────┘                                               │
+│          v                                                      │
+│  ┌──────────────────┐                                           │
+│  │    Logstash      │                                           │
+│  │  (Processing)    │                                           │
+│  │  10 reglas       │                                           │
+│  └────────┬─────────┘                                           │
+│           v                                                     │
+│  ┌──────────────────┐        ┌──────────────────────┐           │
+│  │  Elasticsearch   │<───────│   GLPI Automation    │           │
+│  │   (Storage)      │        │ (Poll + Correlation) │           │
+│  │  Port: 9200      │        └──────────┬───────────┘           │
+│  └────┬────────┬────┘                   │                       │
+│       │        │                        │                       │
+│       v        v                        v                       │
+│  ┌──────────┐  ┌─────────────────┐  ┌──────────────┐            │
+│  │  Kibana  │  │      GLPI       │  │    MySQL     │            │
+│  │Dashboard │  │   (Ticketing)   │  │  (GLPI DB)   │            │
+│  │  :5601   │  │      :9000      │  │              │            │
+│  └──────────┘  └─────────────────┘  └──────────────┘            │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+### Comparación rápida (Antes vs Ahora)
+
+| Elemento | Antes (Inicial) | Ahora (Actual) |
+|----------|------------------|----------------|
+| Reglas en Logstash | 8 reglas | 10 reglas |
+| Ticketing | Predominio manual | Automatizado con `glpi-automation` + validación manual |
+| Correlación | Básica (eventos directos) | Correlación adicional (`syslog-*` y `correlations-*`) |
+| Servicios Docker | 8 servicios | 9 servicios |
+| Flujo SOC | Ataque → Detección → Ticket manual | Ataque → Detección → Correlación → Ticket automático |
 
 ## Componentes del Stack
 
@@ -213,7 +242,7 @@ Espera 30-60 segundos hasta que todos los contenedores estén healthy.
 ### 2. **SIEM (ELK Stack)**
 - **Elasticsearch 8.11.0**: Motor de búsqueda y almacenamiento (Puerto 9200)
   - **IMPORTANTE**: Elasticsearch es la API/backend (puerto 9200) - NO accedas directamente
-- **Logstash 8.11.0**: Procesamiento con 8 reglas de detección (Puerto 5000)
+- **Logstash 8.11.0**: Procesamiento con 10 reglas de detección (Puerto 5000)
 - **Kibana 8.11.0**: **INTERFAZ VISUAL** - Dashboard web para análisis (Puerto 5601)
   - **ACCEDE AQUÍ**: http://localhost:5601 - Esta es la interfaz gráfica donde verás todo
 
@@ -223,7 +252,11 @@ Espera 30-60 segundos hasta que todos los contenedores estén healthy.
   - Crea, asigna y hace seguimiento de tickets de seguridad
 - **MySQL 8.0**: Base de datos para GLPI
 
-### 4. **Generación de Tráfico**
+### 4. **Automatización de Incidentes**
+- **glpi-automation**: Servicio Python que consulta eventos en Elasticsearch y crea tickets automáticamente en GLPI (vía MySQL)
+- Soporta correlación local y lectura de índices `syslog-*` y `correlations-*`
+
+### 5. **Generación de Tráfico**
 - **simulate_attacks.ps1**: Script con 11 tipos de ataques simulados
 
 ## ¿Qué es cada componente?
@@ -245,7 +278,7 @@ Espera 30-60 segundos hasta que todos los contenedores estén healthy.
 **Logstash** - Procesa logs automáticamente
 - Recibe logs → Aplica reglas de detección → Envía a Elasticsearch
 - NO tiene interfaz web
-- Aplica 8 reglas de seguridad en tiempo real
+- Aplica 10 reglas de seguridad en tiempo real
 
 ## � Inicio Rápido
 
@@ -289,7 +322,7 @@ cd syslog-ng-ejemplo
 
 Revisa y modifica los archivos de configuración según tus necesidades:
 
-- `logstash/pipeline/logstash.conf` - Reglas de detección de Logstash (8 reglas personalizadas)
+- `logstash/pipeline/logstash.conf` - Reglas de detección de Logstash (10 reglas personalizadas)
 - `server/syslog-ng.conf` - Configuración del servidor syslog-ng
 - `client/syslog-ng.conf` - Configuración del cliente syslog-ng
 
@@ -311,7 +344,7 @@ Este comando descargará todas las imágenes necesarias y levantará los contene
 docker-compose ps
 ```
 
-Debes ver **8 servicios** en estado `Up`:
+Debes ver **9 servicios** en estado `Up`:
 ```
 syslog-server         Up
 syslog-client         Up
@@ -319,8 +352,9 @@ elasticsearch-siem    Up
 logstash-siem         Up
 kibana-siem           Up
 filebeat-collector    Up
-mysql-db              Up
-glpi-ticketing        Up
+glpi-mysql            Up
+glpi-incidentes       Up
+glpi-automation       Up
 ```
 
 ### 5. Ver logs de los servicios
@@ -331,7 +365,8 @@ docker-compose logs -f
 
 # Ver logs de un servicio específico
 docker-compose logs -f logstash-siem
-docker-compose logs -f glpi-ticketing
+docker-compose logs -f glpi-incidentes
+docker-compose logs -f glpi-automation
 ```
 
 ##  Acceso a las Interfaces Web
@@ -725,7 +760,7 @@ docker-compose up -d
 
 ### Requisito 1: SIEM y Dashboards (ELK Stack)
 - Elasticsearch 8.11.0 para almacenamiento
-- Logstash 8.11.0 con 8 reglas de detección
+- Logstash 8.11.0 con 10 reglas de detección
 - Kibana 8.11.0 con dashboard operativo
 - 3 visualizaciones configuradas
 
